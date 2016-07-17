@@ -1,0 +1,67 @@
+---
+title: "Storm risks for population health and the economy"
+author: "Florian Hochstrasser"
+date: "17 Juli 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+## cache is only valid with a specific version of R and session info
+## cache will be kept for at most a month (re-compute the next month)
+knitr::opts_chunk$set(cache.extra = list(R.version, sessionInfo(), format(Sys.Date(), '%Y-%m')))
+```
+
+
+## Synopsis
+This analysis
+
+
+## Data Processing
+
+The data used for this assignment, as well as accompanying documentation, can be downloaded from the course repository at the following links:
+
+* [Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2)
+* [Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+* [National Climatic Data Center Storm Events FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+The data will be downloaded if not already present. After that, it's read in. The chunk controlling this is set to cache data so that the import of the stormData will be faster on subsequent runs of knitr.
+
+```{r load-data, cache=TRUE}
+url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+dest <- "../data/stormData.csv.bz2"
+if(!file.exists(dest)){
+    download.file(url, dest)
+}
+
+# read.table knows bz2, no need to unzip.
+stormData <- read.table(dest, sep=",", quote = '"', header = T, check.names = T, stringsAsFactors = F)
+# personal preference: make names lowercase
+names(stormData) <- tolower(names(stormData))
+```
+
+### Analysis
+A first glance at the data shows there are `r nrow(stormData)` rows in the dataset. Looking at the structure, there is some work to do regarding field classes and also datetime operaions.
+```{r first-glance}
+nrow(stormData)
+str(stormData)
+```
+
+```{r load-packages, message=FALSE, warning=FALSE}
+library(dplyr)
+library(lubridate)
+```
+
+```{r tidy-stuff}
+sDat <- stormData %>%
+    mutate(state__ = as.factor(state__),
+           time_zone = as.factor(time_zone)
+           )
+```
+
+## Results
+
+### Which types of events are most harmful to population health?
+
+### Which types of events have the greatest economical consequences?
