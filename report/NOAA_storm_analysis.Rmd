@@ -26,7 +26,7 @@ The data used for this assignment, as well as accompanying documentation, can be
 * [Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
 * [National Climatic Data Center Storm Events FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
 
-The data will be downloaded if not already present. After that, it's read in. The chunk controlling this is set to cache data so that the import of the stormData will be faster on subsequent runs of knitr.
+The data will be downloaded if not already present. After that, it's read in. The chunk controlling this is set to cache data so that the import of the stormData will be faster on subsequent runs of knitr. If the R version or the output of sessioninfo() change or the cached content is from last month, it will be regenerated.
 
 ```{r load-data, cache=TRUE}
 url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
@@ -42,26 +42,84 @@ names(stormData) <- tolower(names(stormData))
 ```
 
 ### Analysis
-A first glance at the data shows there are `r nrow(stormData)` rows in the dataset. Looking at the structure, there is some work to do regarding field classes and also datetime operaions.
+A first glance at the data shows there are `r nrow(stormData)` rows in the dataset. Looking at the structure, there is some work to do regarding field classes and also datetime operaions. Also, there seem to be quite some fields that are not that interesting for the questions to be answered, so we'll drop them now.
 ```{r first-glance}
 nrow(stormData)
 str(stormData)
 ```
 
+
+Time to load some additional packages to help with tidying and analysing the data.
 ```{r load-packages, message=FALSE, warning=FALSE}
 library(dplyr)
 library(lubridate)
+library(data.table)
 ```
 
+From the documentation and a look at the field names it is clear that several fields are factor variables. These should be encoded accordingly. Also, we'll encode the date field correctly. And just to make sure we have more consistent data, set state and evtype to upper case.
 ```{r tidy-stuff}
+
+# drop unwanted columns
 sDat <- stormData %>%
-    mutate(state__ = as.factor(state__),
-           time_zone = as.factor(time_zone)
+    select(c(state__,bgn_date,bgn_time,time_zone,county,countyname,state,evtype,length,width,mag,fatalities,injuries,propdmg,propdmgexp,cropdmg,cropdmgexp,wfo,stateoffic)) %>%
+    mutate(county = as.factor(county),
+           countyname = as.factor(countyname),
+           state = as.factor(toupper(state)),
+           evtype = as.factor(toupper(evtype)),
+           propdmgexp = as.factor(propdmgexp),
+           cropdmgexp = as.factor(cropdmgexp),
+           wfo = as.factor(wfo),
+           stateoffic = as.factor(stateoffic),
+           bgn_date = mdy_hms(bgn_date)
            )
+```
+
+A look at the event types reveals that there are `r length(unique(sDat$evtype))` unique events. The documentation states 48 as vaild entries.
+```{r}
+length(unique(sDat$evtype))
+```
+Looking at the entries, they are often very distinct and hard to automatically match up. [Details on the storm events database](http://www.ncdc.noaa.gov/stormevents/details.jsp) shows that up to 1996, only 'tornado', 'thunderstorm wind' and 'hail' were recorded, so at least let's get these consistent and label hurricanes withouth their names, too.
+```{r}
+#cleanup whitspace
+sDat$evtype <- gsub("^\\s+|\\s+$", "", sDat$evtype)
+#replacements
+sDat$evtype <- gsub("^.*THUNDER[STOR]{2,4}M|TSTM.*$","THUNDERSTORM WIND", sDat$evtype)
+sDat$evtype <- gsub("^.*TORNADO.*$", "TORNADO", sDat$evtype)
+sDat$evtype <- gsub("^.*HAIL.*$", "HAIL", sDat$evtype)
+sDat$evtype <- gsub("^.*HURRICANE|TYPHOON.*$", "HURRICANE (TYPHOON)", sDat$evtype)
+sDat$evtype <- gsub("^.*COASTAL.*$", "COASTAL FLOOD", sDat$evtype)
+sDat$evtype <- gsub("^.*AVALAN.*$", "AVALANCHE", sDat$evtype)
+
+```
+
+Now these are the valid events:
+```{r}
+validEvents <- c("Astronomical Low Tide", "Avalanche", "Blizzard", "Coastal Flood", "Cold/Wind Chill", "Debris Flow", "Dense Fog", "Dense Smoke", "Drought", "Dust Devil", "Dust Storm", "Excessive Heat", "Extreme Cold/Wind Chill", "Flash Flood", "Flood", "Frost/Freeze", "Funnel Cloud", "Freezing Fog", "Hail", "Heat", "Heavy Rain", "Heavy Snow", "High Surf", "High Wind", "Hurricane (Typhoon)", "Ice Storm", "Lake-Effect Snow", "Lakeshore Flood", "Lightning", "Marine Hail", "Marine High Wind", "Marine Strong Wind", "Marine Thunderstorm Wind", "Rip Current", "Seiche", "Sleet", "Storm Surge/Tide", "Strong Wind", "Thunderstorm Wind", "Tornado", "Tropical Depression", "Tropical Storm", "Tsunami", "Volcanic Ash", "Waterspout", "Wildfire", "Winter Storm", "Winter Weather")
+validEvents <- toupper(validEvents)
 ```
 
 ## Results
 
 ### Which types of events are most harmful to population health?
+
+Let's dig into the data. First, create a new object with just the event types and the fatalities and injuries per event type. Only those event types with at least one fatality or injury are considered.
+```{r analyse-personal-damage}
+fatalEvents <- sDat %>%
+     group_by(evtype) %>%
+     summarise(totalFatalities = sum(fatalities), totalInjuries = sum(injuries)) %>%
+     filter(totalFatalities > 0 | totalInjuries > 0)
+```
+
+Okay, let's now look at the distribution of fatalities and injuries. 75% of all events have less than 14 fatalities and less than 43 injuries. 
+```{r }
+quantile(fatalEvents$totalFatalities)
+quantile(fatalEvents$totalInjuries)
+```
+
+It is  probably more interesting to look at the deadliest events.
+```{r}
+topFatalEvents <- fatalEvents %>%
+    desc()
+```
 
 ### Which types of events have the greatest economical consequences?
