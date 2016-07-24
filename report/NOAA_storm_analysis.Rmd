@@ -20,7 +20,7 @@ knitr::opts_chunk$set(cache.extra = list(R.version, sessionInfo(), format(Sys.Da
 
 
 ## Synopsis
-This analysis tries to answer the question of which weather events in the US caused the most damage in terms of human and economic losses. Data from 1950 onwards was analysed for this purpose. The top 10 for each human and economic damage is presented. While heat is the top killer, thunderstorms create the biggest economical loss. Tornados and flash floods rank high in both top 10 charts and are therefore very harmful in both regards. A map showing the top deadliest weather event for each US state can help address the greatest risks from weather events.
+This analysis tries to answer the question of which weather events in the US caused the most damage in terms of human and economic losses. Data from 1950 onwards was analysed for this purpose. The top 10 for each human and economic damage is presented. While heat is the top killer, thunderstorms create the biggest economical loss. Tornados and flash floods rank high in both top 10 charts and are therefore very harmful in both regards. A map showing the top deadliest weather event for each US state can help address the greatest risks from weather events. Another map shows the most costly event types, again intended to give a first pointer as to where risk-mitigating efforts could be made.
 
 
 ## Data Processing
