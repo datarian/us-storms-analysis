@@ -4,3 +4,5 @@ data/RRCaseStudy.pdf
 data/stormData.csv.bz2
 report/NOAA_storm_analysis_cache/
 .RData
+report/NOAA_storm_analysis_files/figure-html/biggest-damage-per-state-1.png
+report/NOAA_storm_analysis_files/

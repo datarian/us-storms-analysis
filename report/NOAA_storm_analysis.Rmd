@@ -1,12 +1,17 @@
 ---
-title: "Storm risks for population health and the economy"
+title: "An analyis of storm risks in the US for population health and the economy: Heat is top killer, thunderstorms cause greatest economical damage"
 author: "Florian Hochstrasser"
 date: "17 Juli 2016"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.aspect=0.618)
+options(scipen=1, digits=2)
+ 
 
 ## cache is only valid with a specific version of R and session info
 ## cache will be kept for at most a month (re-compute the next month)
@@ -15,7 +20,7 @@ knitr::opts_chunk$set(cache.extra = list(R.version, sessionInfo(), format(Sys.Da
 
 
 ## Synopsis
-This analysis
+This analysis tries to answer the question of which weather events in the US caused the most damage in terms of human and economic losses. Data from 1950 onwards was analysed for this purpose. The top 10 for each human and economic damage is presented. While heat is the top killer, thunderstorms create the biggest economical loss. Tornados and flash floods rank high in both top 10 charts and are therefore very harmful in both regards. A map showing the top deadliest weather event for each US state can help address the greatest risks from weather events.
 
 
 ## Data Processing
@@ -41,85 +46,321 @@ stormData <- read.table(dest, sep=",", quote = '"', header = T, check.names = T,
 names(stormData) <- tolower(names(stormData))
 ```
 
-### Analysis
-A first glance at the data shows there are `r nrow(stormData)` rows in the dataset. Looking at the structure, there is some work to do regarding field classes and also datetime operaions. Also, there seem to be quite some fields that are not that interesting for the questions to be answered, so we'll drop them now.
+### Overview
+A first glance at the data shows there are `r nrow(stormData)` rows in the dataset. Looking at the structure, there is some work to do regarding field classes and also datetime operaions. Also, there seem to be several fields that are not interesting for the questions to be answered, so we'll exclude them from the analysis.
 ```{r first-glance}
 nrow(stormData)
 str(stormData)
 ```
 
 
+### Tidying & consolidation
+
 Time to load some additional packages to help with tidying and analysing the data.
 ```{r load-packages, message=FALSE, warning=FALSE}
+library(rmarkdown)
+library(knitr)
 library(dplyr)
 library(lubridate)
-library(data.table)
+library(ggplot2)
+library(scales)
+library(RColorBrewer)
 ```
 
-From the documentation and a look at the field names it is clear that several fields are factor variables. These should be encoded accordingly. Also, we'll encode the date field correctly. And just to make sure we have more consistent data, set state and evtype to upper case.
+From the documentation and a look at the field names it is obvious that several fields are factor variables. These should be encoded accordingly. Also, we'll encode the date field correctly. And just to make sure we have more consistent data, set state to upper case and evtype to lower case. We might as well only include the events that had some form of damage associated with them. Events without damage are not interesting for the questions.
+
 ```{r tidy-stuff}
 
-# drop unwanted columns
+# filter and select to subset data
 sDat <- stormData %>%
-    select(c(state__,bgn_date,bgn_time,time_zone,county,countyname,state,evtype,length,width,mag,fatalities,injuries,propdmg,propdmgexp,cropdmg,cropdmgexp,wfo,stateoffic)) %>%
+    filter(fatalities > 0 | injuries > 0 | propdmg > 0 | cropdmg > 0 | propdmgexp != "" | cropdmgexp != "") %>%
+    select(c(bgn_date,county,countyname,state,evtype,fatalities,injuries,propdmg,propdmgexp,cropdmg,cropdmgexp)) %>%
     mutate(county = as.factor(county),
            countyname = as.factor(countyname),
            state = as.factor(toupper(state)),
-           evtype = as.factor(toupper(evtype)),
+           evtype = as.factor(tolower(evtype)),
            propdmgexp = as.factor(propdmgexp),
            cropdmgexp = as.factor(cropdmgexp),
-           wfo = as.factor(wfo),
-           stateoffic = as.factor(stateoffic),
            bgn_date = mdy_hms(bgn_date)
            )
+nrow(sDat)
 ```
 
-A look at the event types reveals that there are `r length(unique(sDat$evtype))` unique events. The documentation states 48 as vaild entries.
-```{r}
+There are `r nrow(sDat)` records left (the ones with some sort of damage). A look at the event types reveals that there are `r length(unique(sDat$evtype))` unique event types. The documentation states 48 vaild entries. Obviously, there are many invalid event types recorded.
+```{r evtype-step1}
 length(unique(sDat$evtype))
 ```
-Looking at the entries, they are often very distinct and hard to automatically match up. [Details on the storm events database](http://www.ncdc.noaa.gov/stormevents/details.jsp) shows that up to 1996, only 'tornado', 'thunderstorm wind' and 'hail' were recorded, so at least let's get these consistent and label hurricanes withouth their names, too.
-```{r}
-#cleanup whitspace
+Looking at the entries, they are often very distinct and hard to automatically match up. An incremental approach was used to figure out good replacements. In the end, for each valid event type this procedure was used:
+    1. On the console (exemplary): `grep("Drought", sDat)` to see what the variation in the naming scheme was
+    2. A `gsub` command was created to replace the variants as complete as possible
+
+These are the valid events:
+```{r evtype-step2}
+validEvents <- tolower(c("Astronomical Low Tide", "Avalanche", "Blizzard", "Coastal Flood", "Cold/Wind Chill", "Debris Flow", "Dense Fog", "Dense Smoke", "Drought", "Dust Devil", "Dust Storm", "Excessive Heat", "Extreme Cold/Wind Chill", "Flash Flood", "Flood", "Frost/Freeze", "Funnel Cloud", "Freezing Fog", "Hail", "Heat", "Heavy Rain", "Heavy Snow", "High Surf", "High Wind", "Hurricane (Typhoon)", "Ice Storm", "Lake-Effect Snow", "Lakeshore Flood", "Lightning", "Marine Hail", "Marine High Wind", "Marine Strong Wind", "Marine Thunderstorm Wind", "Rip Current", "Seiche", "Sleet", "Storm Surge/Tide", "Strong Wind", "Thunderstorm Wind", "Tornado", "Tropical Depression", "Tropical Storm", "Tsunami", "Volcanic Ash", "Waterspout", "Wildfire", "Winter Storm", "Winter Weather"))
+```
+
+The following gsub commands were used. It seems that 'thunderstorm' is a very hard word to get right. It shows many different writings in the original data and needs elaborate regex-ing.
+```{r evtype-step3}
+
+#cleanup whitspace first
 sDat$evtype <- gsub("^\\s+|\\s+$", "", sDat$evtype)
-#replacements
-sDat$evtype <- gsub("^.*THUNDER[STOR]{2,4}M|TSTM.*$","THUNDERSTORM WIND", sDat$evtype)
-sDat$evtype <- gsub("^.*TORNADO.*$", "TORNADO", sDat$evtype)
-sDat$evtype <- gsub("^.*HAIL.*$", "HAIL", sDat$evtype)
-sDat$evtype <- gsub("^.*HURRICANE|TYPHOON.*$", "HURRICANE (TYPHOON)", sDat$evtype)
-sDat$evtype <- gsub("^.*COASTAL.*$", "COASTAL FLOOD", sDat$evtype)
-sDat$evtype <- gsub("^.*AVALAN.*$", "AVALANCHE", sDat$evtype)
 
+#replacements necessary for most of the official event types:
+sDat$evtype <- gsub("^.*avalan.*$", "avalanche", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*blizzard.*$", "blizzard.", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*coastal.*$", "coastal flood", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^((?!extreme|record|unseasonable|bitter)).*cold{1}.*$", "cold/wind chill", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*debris.*$", "debris flow", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^((?!freezing)).*fog{1}.*$", "dense fog", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*drought.*$", "drought", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*devil.*$", "dust devil", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^dust((?!devil).)*$", "dust storm", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^(excessive|extreme|record).*heat{1}.*$", "excessive heat", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(extreme|record|bitter|unseason).*cold$", "extreme cold/wind chill", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*flash.*$", "flash flood", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^((?!flash|coastal|lakeshore)).*(flood|fld).*$", "flood", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*hail.*$", "hail", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*frost*$", "frost/freeze", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^((?!excessive|extreme|record)).*heat{1}.*$", "heat", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(heavy|hvy|torrential|excessive|record) rain{1}.*$", "heavy rain", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(heavy|hvy|excessive|record) snow{1}.*$", "heavy snow", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(heavy|high|rough|hazardous).*surf{1}.*$", "high surf", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*high wind.*$", "high wind", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(hurricane|typhoon).*$", "hurricane (typhoon)", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*ice storm.*$", "ice storm", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*lake( |-)effect.*$", "lake-effect snow", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*lakeshore.*$", "lakeshore flood", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^lightning.*$", "lightning", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*marine tstm*$", "marine thunderstorm wind", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^rip*$", "rip current", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*sleet*$", "sleet", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*surge*$", "storm surge", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*strong wind*$", "strong wind", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(th?u[ndestor]{6,9}m|tstm).*$","thunderstorm wind", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*(tornado|whirlwind).*$", "tornado", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*tropical storm*$", "tropical storm", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*volcanic ash*$", "volcanic ash", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*waterspout*$", "waterspout", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^.*wildfire*$", "wildfire", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^winter storm*$", "winter storm", sDat$evtype, perl=T)
+sDat$evtype <- gsub("^winter weather*$", "winter weather", sDat$evtype, perl=T)
 ```
 
-Now these are the valid events:
-```{r}
-validEvents <- c("Astronomical Low Tide", "Avalanche", "Blizzard", "Coastal Flood", "Cold/Wind Chill", "Debris Flow", "Dense Fog", "Dense Smoke", "Drought", "Dust Devil", "Dust Storm", "Excessive Heat", "Extreme Cold/Wind Chill", "Flash Flood", "Flood", "Frost/Freeze", "Funnel Cloud", "Freezing Fog", "Hail", "Heat", "Heavy Rain", "Heavy Snow", "High Surf", "High Wind", "Hurricane (Typhoon)", "Ice Storm", "Lake-Effect Snow", "Lakeshore Flood", "Lightning", "Marine Hail", "Marine High Wind", "Marine Strong Wind", "Marine Thunderstorm Wind", "Rip Current", "Seiche", "Sleet", "Storm Surge/Tide", "Strong Wind", "Thunderstorm Wind", "Tornado", "Tropical Depression", "Tropical Storm", "Tsunami", "Volcanic Ash", "Waterspout", "Wildfire", "Winter Storm", "Winter Weather")
-validEvents <- toupper(validEvents)
+
+### The final dataset for analysis
+
+```{r evtype-step4}
+#How many event types are left?
+length(unique(sDat$evtype))
+
+#How many records with a valid event type?
+nrow(sDat %>% filter(evtype %in% validEvents))
+
+#How much data will be excluded from the analysis (in percent)?
+(1 - nrow(sDat %>% filter(evtype %in% validEvents))/nrow(sDat)) * 100
 ```
+For further analysis, the data will be filtered to exclude all invalid event types that are now left. This will result in some loss of data (1 % will be excluded). This seems like a figure one can live with.
 
 ## Results
 
 ### Which types of events are most harmful to population health?
 
-Let's dig into the data. First, create a new object with just the event types and the fatalities and injuries per event type. Only those event types with at least one fatality or injury are considered.
+Let's dig into the actual analysis. Sum fatalities and injuries by event type first, then extract the top 10. Looking at the top 10 for fatalities and injuries, the single most hazardous event is the tornado, both in terms of fatalities and injuries.
+
 ```{r analyse-personal-damage}
-fatalEvents <- sDat %>%
-     group_by(evtype) %>%
-     summarise(totalFatalities = sum(fatalities), totalInjuries = sum(injuries)) %>%
-     filter(totalFatalities > 0 | totalInjuries > 0)
+humanDamageTotal <- sDat %>%
+    group_by(evtype) %>%
+    summarise(totalFatalities = sum(fatalities), totalInjuries = sum(injuries)) %>%
+    top_n(10,totalFatalities) %>%
+    arrange(desc(totalFatalities))
+
+
+kable(humanDamageTotal,
+      col.names = c("Event type", "Total fatalities", "Total injuries"),
+      digits = 0,
+      caption = "Top 10 weather events causing fatalities or injuries in the US since 1950\\label{exp-area}",
+      align = c("l", "r", "r"),
+      booktabs = T)
+    
 ```
 
-Okay, let's now look at the distribution of fatalities and injuries. 75% of all events have less than 14 fatalities and less than 43 injuries. 
-```{r }
-quantile(fatalEvents$totalFatalities)
-quantile(fatalEvents$totalInjuries)
+However, this result may be biased. [Details on the storm events database](http://www.ncdc.noaa.gov/stormevents/details.jsp) shows that up to 1996, only 'tornado', 'thunderstorm wind' and 'hail' were recorded. The tornado might therefore be a false 'winner'. If only the events from 1996 onwards are taken into account, the ranking changes. Excessive heat now is the most deadly event, but tornados continue to lead the injury charts.
+
+```{r analyse-personal-damage-recent}
+humanDamageRecentTotal <- sDat %>%
+    filter(year(bgn_date) >= 1996) %>%
+    group_by(evtype) %>%
+    summarise(totalFatalities = sum(fatalities), totalInjuries = sum(injuries)) %>%
+    top_n(10,totalFatalities) %>%
+    arrange(desc(totalFatalities))
+
+kable(humanDamageRecentTotal,
+      col.names = c("Event type", "Total fatalities", "Total injuries"),
+      digits = 0,
+      caption = "Top 10 weather events causing fatalities or injuries in the US since 1996\\label{exp-area}",
+      align = c("l", "r", "r"))
 ```
 
-It is  probably more interesting to look at the deadliest events.
-```{r}
-topFatalEvents <- fatalEvents %>%
-    desc()
+Let's have a look at the top killers since 1996 per state on a map. Some preparatory work is necessary to combine map data with the storm dataset (matching field is the statename).
+
+The final result is a map showing the top killer for each state.
+
+```{r plot-fatalities, fig.cap="Most deadly weather event per state since 1996."}
+humanDamageRecent <- sDat %>%
+    filter(year(bgn_date) >= 1996) %>%
+    group_by(state,evtype) %>%
+    summarise(totalFatalities = sum(fatalities), totalInjuries = sum(injuries)) %>%
+    top_n(10,totalFatalities) %>%
+    arrange(desc(totalFatalities))
+
+statelist <- c("AK", "AL", "AR", "AS", "AZ", "CA", "CO", "CT", "DC", "DE", "FL",
+               "GA", "GU", "HI", "IA", "ID", "IL", "IN", "KS", "KY", "LA", "MA",
+               "MD", "ME", "MI", "MH", "MN", "MO", "MS", "MT", "NC", "ND", "NE",
+               "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "PR", "RI",
+               "SC", "SD", "TN", "TX", "UT", "VA", "VI", "VT", "WA", "WI", "WV",
+               "WY")
+
+stateNameFromCode <-function(x) {
+    #read 56 state codes into local variable
+    st.codes<-data.frame(
+        state=as.factor(c("AK", "AL", "AR", "AS", "AZ", "CA", "CO", "CT", "DC",
+                          "DE", "FL", "GA", "GU", "HI", "IA", "ID", "IL", "IN",
+                          "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MH", "MN",
+                          "MO", "MS",  "MT", "NC","ND", "NE", "NH", "NJ", "NM",
+                          "NV", "NY", "OH", "OK", "OR", "PA", "PR", "RI", "SC",
+                          "SD", "TN", "TX", "UT", "VA", "VI", "VT", "WA", "WI",
+                          "WV", "WY")),
+        full=as.factor(c("alaska","alabama","arkansas", "american samoa",
+                         "arizona","california","colorado", "connecticut",
+                         "district of columbia","delaware","florida","georgia",
+                         "guam", "hawaii","iowa","idaho","illinois","indiana",
+                         "kansas","kentucky", "louisiana","massachusetts",
+                         "maryland","maine","michigan", "marshall islands",
+                         "minnesota", "missouri","mississippi","montana",
+                         "north carolina","north dakota", "nebraska",
+                         "new hampshire","new jersey","new mexico","nevada",
+                         "new york","ohio","oklahoma","oregon","pennsylvania",
+                         "puerto rico", "rhode island","south carolina",
+                         "south dakota","tennessee","texas", "utah","virginia",
+                         "virgin islands", "vermont","washington","wisconsin",
+                         "west virginia","wyoming"))
+    )
+    #create an nx1 data.frame of state codes from source column
+    st.x<-data.frame(state=x)
+    #match source codes with codes from 'st.codes' local variable and use to return the full state name
+    refac.x<-st.codes$full[match(st.x$state,st.codes$state)]
+    #return the full state names in the same order in which they appeared in the original source
+    return(refac.x)
+}
+
+
+humanDamageRecentPlot <- humanDamageRecent %>%
+    top_n(1,totalFatalities) %>%
+    mutate(statename = stateNameFromCode(state))
+
+states <- map_data("state")
+states <- states %>% mutate(statename = region)
+choropleth <- merge(states,humanDamageRecentPlot, by = "statename")
+choropleth <- choropleth[order(choropleth$order), ]
+
+nCols <- length(unique(choropleth$evtype))
+evPal <- colorRampPalette(brewer.pal(11, "Spectral"))
+
+ggplot(choropleth, aes(long,lat, group = group)) + 
+    geom_polygon(aes(fill = evtype), colour = alpha("white", 1/2), size = 0.2) +
+    geom_polygon(data = states, colour = "white", fill = NA) +
+    scale_fill_manual("Deadliest event type", values = evPal(nCols)) +
+    theme_void()
 ```
+
+> Summing it up, excessive heat kills the most people, while tornados injure the most. The most deadly events per state might help to mitigate risks.
 
 ### Which types of events have the greatest economical consequences?
+
+The same approach used for human damange is repeated here, but crop and property damage are combined to report total economic damage. The sorting is done by combining the total damage for property and crops combined.
+
+```{r analyse-economical-damage}
+economicalDamage <- sDat %>%
+    group_by(evtype) %>%
+    summarise(totalPropdmg = sum(propdmg), totalCropDmg = sum(cropdmg)) %>%
+    top_n(10,totalPropdmg+totalCropDmg) %>%
+    arrange(desc(totalPropdmg+totalCropDmg))
+
+kable(economicalDamage,
+      col.names = c("Event type", "Total roperty damage $US", "Total crop damage $US"),
+      digits = 0,
+      caption = "Top 10 weather events causing economical damage since 1950\\label{exp-area}",
+      align = c("l", "r", "r"))
+
+```
+
+Again, the results are biased because data before 1996 had only three event types. Filtering out the older data yields a different top 10 again:
+
+```{r econ-damage-recent}
+economicalDamageRecent <- sDat %>%
+    filter(year(bgn_date) >= 1996) %>%
+    group_by(evtype) %>%
+    summarise(totalPropdmg = sum(propdmg), totalCropDmg = sum(cropdmg)) %>%
+    top_n(10,totalPropdmg+totalCropDmg) %>%
+    arrange(desc(totalPropdmg+totalCropDmg))
+
+kable(economicalDamageRecent,
+      col.names = c("Event type", "Total property damage $US", "Total crop damage $US"),
+      digits = 0,
+      caption = "Top 10 weather events causing economical damage since 1996\\label{exp-area}",
+      align = c("l", "r", "r"))
+```
+
+The ranking is again slightly different for all events since 1950 and the more recent period since 1996, but the same 10 event types are represented in the top 10. They differ slightly from the top killers, however.
+
+The results are again displayed on a map.
+```{r biggest-damage-per-state, fig.cap="Most costly event type for each US state since 1996."}
+
+economicalDamageRecentPlot <- sDat %>%
+    filter(year(bgn_date) >= 1996) %>%
+    mutate(econDamage = propdmg + cropdmg) %>%
+    group_by(state,evtype) %>%
+    summarise(totalEconDamage = sum(econDamage)) %>%
+    top_n(1,totalEconDamage) %>%
+    mutate(statename = stateNameFromCode(state))
+
+choropleth <- merge(states,economicalDamageRecentPlot, by = "statename")
+choropleth <- choropleth[order(choropleth$order), ]
+
+nCols <- length(unique(choropleth$evtype))
+evPal <- colorRampPalette(brewer.pal(11, "Spectral"))
+
+ggplot(choropleth, aes(long,lat, group = group)) + 
+    geom_polygon(aes(fill = evtype), colour = alpha("white", 1/2), size = 0.2) +
+    geom_polygon(data = states, colour = "white", fill = NA) +
+    scale_fill_manual("Most costly event type", values = evPal(nCols)) +
+    theme_void()
+```
+
+###Combining population and economical damage
+An intersting way to look at the overall picture might be to compare human damage and economical damage of the event types. Double logarithmic axes are used because data is spread quite wide.
+
+```{r fig.cap="The 20 weather events with the highest loss regarding both economical and human damage since 1996. Top right events are most damaging to both life and property/crops."}
+damageComparison <- sDat %>%
+    filter(year(bgn_date) >= 1996) %>%
+    mutate(econDamage = propdmg + cropdmg) %>%
+    group_by(evtype) %>%
+    summarise(totalFatalities = sum(fatalities), totalEconDamage = sum(econDamage)) %>%
+    top_n(20,sqrt(totalFatalities^2+totalEconDamage^2))
+
+library(ggrepel) # intelligent label placement
+
+ggplot(damageComparison, aes(totalEconDamage, totalFatalities)) +
+    geom_point(size = 2,colour="red") +
+    geom_text_repel(aes(label = evtype)) +
+    coord_trans(y="log10",x="log10") +
+    scale_y_continuous(trans = log10_trans(),
+                       breaks = trans_breaks("log10",function(x) 10^x),
+                       labels = trans_format("log10", math_format(10^.x))) +
+    scale_x_continuous(trans = log10_trans(),
+                       breaks = trans_breaks("log10", function(x) 10^x),
+                       labels = trans_format("log10", math_format(10^.x))) +
+    xlab("Total economic damage (property and crop, log), $US") +
+    ylab("Total fatalities (log)") +
+    theme_bw()
+```
